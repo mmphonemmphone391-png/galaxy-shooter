@@ -1,1 +1,338 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8">
+<title>GALAXY SHOOTER FINAL</title>
+<style>
+body{margin:0;background:black;overflow:hidden;font-family:monospace}
+canvas{display:block;margin:auto;image-rendering:pixelated}
+#menu,#endScreen{
+position:absolute;top:50%;left:50%;
+transform:translate(-50%,-50%);
+text-align:center;color:white;
+}
+button{
+padding:10px 25px;margin:10px;
+font-size:16px;background:#00ffee;
+border:none;cursor:pointer;
+}
+#ui{
+position:absolute;top:10px;left:50%;
+transform:translateX(-50%);
+color:#00ffee;font-size:18px;
+display:none;
+}
+</style>
+</head>
+<body>
+
+<div id="menu">
+<h1>GALAXY SHOOTER</h1>
+<p>Select Difficulty</p>
+<button onclick="startGame('easy')">EASY</button>
+<button onclick="startGame('normal')">NORMAL</button>
+<button onclick="startGame('hard')">HARD</button>
+</div>
+
+<div id="ui">
+HP: <span id="hp"></span> |
+BOSS: <span id="bossHp"></span>
+</div>
+
+<div id="endScreen" style="display:none">
+<h1 id="endText"></h1>
+<button onclick="location.reload()">PLAY AGAIN</button>
+</div>
+
+<canvas id="game" width="400" height="600"></canvas>
+
+<script>
+const canvas=document.getElementById("game");
+const ctx=canvas.getContext("2d");
+
+/* ========= VARIABLES ========= */
+let difficulty="normal";
+let hp=7,bossHPBase=80,bossSpeed=2,bossFireRate=60,playerDamage=2;
+
+let running=false;
+let playerAlive=true;
+let shake=0,flash=0;
+
+let player={x:180,y:520,w:40,h:40,speed:5,cool:0};
+let bullets=[],bossBullets=[],particles=[],stars=[],debris=[];
+let boss=null;
+
+/* ========= START GAME ========= */
+function startGame(level){
+difficulty=level;
+
+if(level==="easy"){
+hp=10; bossHPBase=60; bossSpeed=1.5; bossFireRate=80; playerDamage=3;
+}
+if(level==="normal"){
+hp=7; bossHPBase=80; bossSpeed=2; bossFireRate=60; playerDamage=2;
+}
+if(level==="hard"){
+hp=5; bossHPBase=120; bossSpeed=3; bossFireRate=35; playerDamage=1;
+}
+
+document.getElementById("menu").style.display="none";
+document.getElementById("ui").style.display="block";
+
+spawnBoss();
+updateHP();
+running=true;
+update();
+}
+
+/* ========= AUDIO ========= */
+let audioCtx=new (window.AudioContext||window.webkitAudioContext)();
+document.addEventListener("click",()=>audioCtx.resume());
+
+function sound(type,freq,dur,vol){
+let o=audioCtx.createOscillator();
+let g=audioCtx.createGain();
+o.type=type;o.frequency.value=freq;
+o.connect(g);g.connect(audioCtx.destination);
+g.gain.value=vol;
+o.start();o.stop(audioCtx.currentTime+dur);
+}
+function shootSound(){sound("square",700,0.08,0.2);}
+function explosionSound(){sound("sawtooth",60,0.6,0.4);}
+function gameOverSound(){sound("triangle",100,0.7,0.3);}
+
+/* ========= BACKGROUND ========= */
+for(let i=0;i<100;i++){
+stars.push({x:Math.random()*400,y:Math.random()*600,s:Math.random()*2});
+}
+function drawBackground(){
+ctx.fillStyle="#000014";
+ctx.fillRect(0,0,400,600);
+stars.forEach(s=>{
+s.y+=1;if(s.y>600)s.y=0;
+ctx.fillStyle="white";
+ctx.fillRect(s.x,s.y,s.s,s.s);
+});
+}
+
+/* ========= PLAYER ========= */
+function drawPlayer(){
+if(!playerAlive) return;
+
+let x=player.x,y=player.y;
+ctx.fillStyle="#00ffee";
+ctx.fillRect(x+15,y,10,40);
+ctx.fillStyle="#0088ff";
+ctx.fillRect(x,y+20,15,10);
+ctx.fillRect(x+25,y+20,15,10);
+ctx.fillStyle="white";
+ctx.fillRect(x+17,y+8,6,8);
+ctx.fillStyle="orange";
+ctx.fillRect(x+18,y+38,4,6);
+}
+
+/* ========= PLAYER DEBRIS ========= */
+function createDebris(){
+for(let i=0;i<25;i++){
+debris.push({
+x:player.x+20,
+y:player.y+20,
+dx:(Math.random()-0.5)*8,
+dy:(Math.random()-0.5)*8,
+life:60
+});
+}
+}
+
+function drawDebris(){
+debris.forEach((d,i)=>{
+d.x+=d.dx;
+d.y+=d.dy;
+d.life--;
+ctx.fillStyle="gray";
+ctx.fillRect(d.x,d.y,4,4);
+if(d.life<=0) debris.splice(i,1);
+});
+}
+
+/* ========= BOSS ========= */
+function spawnBoss(){
+boss={x:100,y:60,w:200,h:70,hp:bossHPBase,dir:bossSpeed,cool:0};
+updateBossHP();
+}
+
+function drawBoss(){
+if(!boss)return;
+
+boss.x+=boss.dir;
+if(boss.x<0||boss.x+boss.w>400)boss.dir*=-1;
+
+ctx.fillStyle=boss.hp<bossHPBase/2?"red":"purple";
+ctx.fillRect(boss.x+50,boss.y,100,70);
+ctx.fillStyle="darkred";
+ctx.fillRect(boss.x,boss.y+20,50,30);
+ctx.fillRect(boss.x+150,boss.y+20,50,30);
+ctx.fillStyle="lime";
+ctx.fillRect(boss.x+90,boss.y+25,20,15);
+
+if(boss.cool<=0){
+for(let i=-1;i<=1;i++){
+bossBullets.push({
+x:boss.x+100,
+y:boss.y+70,
+dx:i*1.5,
+dy:4
+});
+}
+boss.cool=bossFireRate;
+}
+boss.cool--;
+}
+
+/* ========= EXPLOSION ========= */
+function explode(x,y,big=false){
+explosionSound();
+let count=big?120:25;
+for(let i=0;i<count;i++){
+particles.push({
+x:x,y:y,
+dx:(Math.random()-0.5)*(big?12:6),
+dy:(Math.random()-0.5)*(big?12:6),
+life:50
+});
+}
+shake=20;
+flash=15;
+}
+
+function drawParticles(){
+particles.forEach((p,i)=>{
+p.x+=p.dx;p.y+=p.dy;p.life--;
+ctx.fillStyle="orange";
+ctx.fillRect(p.x,p.y,4,4);
+if(p.life<=0)particles.splice(i,1);
+});
+}
+
+/* ========= COLLISION ========= */
+function hit(a,b){
+return a.x<b.x+b.w&&a.x+a.w>b.x&&a.y<b.y+b.h&&a.y+a.h>b.y;
+}
+
+/* ========= UPDATE ========= */
+let keys={};
+document.addEventListener("keydown",e=>keys[e.key]=true);
+document.addEventListener("keyup",e=>keys[e.key]=false);
+
+function update(){
+if(!running)return;
+
+ctx.save();
+if(shake>0){
+ctx.translate(Math.random()*shake-shake/2,Math.random()*shake-shake/2);
+shake-=0.5;
+}
+
+drawBackground();
+
+/* PLAYER MOVE */
+if(playerAlive){
+if(keys["ArrowLeft"]&&player.x>0)player.x-=player.speed;
+if(keys["ArrowRight"]&&player.x<360)player.x+=player.speed;
+}
+
+/* SHOOT */
+if(playerAlive && keys[" "]&&player.cool<=0){
+bullets.push({x:player.x+19,y:player.y});
+shootSound();
+player.cool=10;
+}
+if(player.cool>0)player.cool--;
+
+/* PLAYER BULLETS */
+bullets.forEach((b,i)=>{
+b.y-=8;
+ctx.fillStyle="yellow";
+ctx.fillRect(b.x,b.y,4,10);
+if(b.y<0)bullets.splice(i,1);
+
+if(boss&&hit({x:b.x,y:b.y,w:4,h:10},boss)){
+bullets.splice(i,1);
+boss.hp-=playerDamage;
+explode(b.x,b.y);
+updateBossHP();
+
+if(boss.hp<=0){
+let centerX=boss.x+100;
+let centerY=boss.y+40;
+let boom=setInterval(()=>{
+explode(centerX+(Math.random()*80-40),
+centerY+(Math.random()*40-20),true);
+},200);
+
+setTimeout(()=>{
+clearInterval(boom);
+boss=null;
+running=false;
+document.getElementById("endText").innerText="YOU WIN 🚀";
+document.getElementById("endScreen").style.display="block";
+},2000);
+}
+}
+});
+
+/* BOSS */
+drawBoss();
+
+/* BOSS BULLETS */
+bossBullets.forEach((b,i)=>{
+b.x+=b.dx;b.y+=b.dy;
+ctx.fillStyle="red";
+ctx.fillRect(b.x,b.y,6,10);
+if(b.y>600)bossBullets.splice(i,1);
+
+if(playerAlive && hit({x:b.x,y:b.y,w:6,h:10},player)){
+bossBullets.splice(i,1);
+hp--;
+updateHP();
+
+if(hp<=0){
+playerAlive=false;
+createDebris();
+explode(player.x+20,player.y+20,true);
+gameOverSound();
+
+setTimeout(()=>{
+running=false;
+document.getElementById("endText").innerText="GAME OVER";
+document.getElementById("endScreen").style.display="block";
+},2000);
+}
+}
+});
+
+/* FLASH */
+if(flash>0){
+ctx.fillStyle="white";
+ctx.globalAlpha=0.6;
+ctx.fillRect(0,0,400,600);
+ctx.globalAlpha=1;
+flash--;
+}
+
+drawPlayer();
+drawDebris();
+drawParticles();
+ctx.restore();
+
+requestAnimationFrame(update);
+}
+
+/* ========= UI ========= */
+function updateHP(){document.getElementById("hp").innerText=hp;}
+function updateBossHP(){document.getElementById("bossHp").innerText=boss?boss.hp:"--";}
+
+</script>
+</body>
+</html>
 
